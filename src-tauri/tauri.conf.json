@@ -1,0 +1,26 @@
+{
+  "productName": "Huddle Recorder",
+  "version": "0.1.0",
+  "identifier": "com.huddle.recorder",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Huddle Meeting Recorder",
+        "width": 500,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
