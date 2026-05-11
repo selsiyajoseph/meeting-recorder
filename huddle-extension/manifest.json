@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Huddle Detector",
+  "version": "1.0.0",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://chat.google.com/*",
+    "https://mail.google.com/*",
+    "https://meet.google.com/*",
+    "http://localhost:9876/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.google.com/*",
+        "https://mail.google.com/*",
+        "https://meet.google.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ]
+}
