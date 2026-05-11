@@ -1,0 +1,28 @@
+{
+  "name": "meeting-recorder",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "server": "node server.js",
+    "start": "concurrently \"npm run server\" \"npm run dev\""
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "cors": "^2.8.6",
+    "express": "^4.22.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "vite": "^8.0.0"
+  }
+}
