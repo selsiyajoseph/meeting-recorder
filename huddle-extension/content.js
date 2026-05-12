@@ -184,11 +184,11 @@ function checkMicMute() {
     setTimeout(detectCall, 5000);
     
     setInterval(detectCall, 2000);
-    setInterval(checkMicMute, 1000);    // ← ADD THIS
+    setInterval(checkMicMute, 3000);    // ← ADD THIS
     
     const observer = new MutationObserver(() => {
         detectCall();
-        checkMicMute();                 // ← ADD THIS
+                       // ← ADD THIS
     });
     
     observer.observe(document.body, {
