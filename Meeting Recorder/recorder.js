@@ -154,6 +154,36 @@ let currentService = null;
         timerInterval = null;
     }
 
+
+
+    function setupMeetingEndDetection() {
+    if (!currentTabId) return;
+    
+    const checkInterval = setInterval(async () => {
+        if (!isRecording) {
+            clearInterval(checkInterval);
+            return;
+        }
+        
+        try {
+            // Check if the source tab is still in a meeting
+            const response = await chrome.tabs.sendMessage(currentTabId, { action: "checkMeetingStatus" }).catch(() => null);
+            
+            if (response && !response.isInMeeting) {
+                console.log("🔍 Detected: Source tab is no longer in meeting - stopping recording");
+                stopRecording();
+                clearInterval(checkInterval);
+            }
+        } catch (error) {
+            // Tab might be closed or not responding
+            console.log("🔍 Could not check meeting status, assuming meeting ended");
+            stopRecording();
+            clearInterval(checkInterval);
+        }
+    }, 2000);
+}
+
+
     function downloadRecording() {       
         
         if (!recordedChunks.length) {
@@ -771,6 +801,7 @@ let currentService = null;
         startTimer();
 
         setupTabClosureDetection(currentTabId);
+        setupMeetingEndDetection();  // ← ADD THIS LINE HERE
 
         chrome.storage.local.set({ isRecording: true, recordingStartTime });
         chrome.runtime.sendMessage({ action: "recordingStarted" });
