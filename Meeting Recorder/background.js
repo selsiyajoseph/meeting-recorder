@@ -93,23 +93,32 @@
             const transitionTime = result.extendTransitionTime || 0;
             const timeSinceExtend = Date.now() - transitionTime;
             
-          if (timeSinceExtend < 10000) {
+           if (timeSinceExtend < 10000) {
     console.log("✅ Valid extend transition - Setting block flag");
     
     await chrome.storage.local.set({ 
         blockMeetAutoRecord: true,
         blockMeetAutoRecordUntil: Date.now() + 15000,
-        isExtendingFromHuddle: true
+        isExtendingFromHuddle: true,
+        isForceRecordFromHuddle: true
     });
     
     chrome.storage.local.remove(['isExtendingToMeet', 'extendTransitionTime']);
     
     console.log("🔒 Meet auto-record BLOCKED for 15 seconds");
+    console.log("🔥 Force record flag set to TRUE");
     
-    // IMPORTANT: Pass forceRecord = true as 4th parameter
     setTimeout(() => {
-        console.log("🔥 FORCING recording from Huddle with forceRecord=true");
-        startRecordingForTab(tabId, 'gmeet', true, true);  // 4 parameters!
+        startRecordingForTab(tabId, 'gmeet', true, true);
+        
+        // 🔥 NEW: Broadcast initial timer after recording starts
+        setTimeout(() => {
+            chrome.tabs.sendMessage(tabId, {
+                action: "updateMeetTimer",
+                time: "00:00"
+            }).catch(() => {});
+            console.log("⏱️ Initial timer broadcast sent to Meet tab");
+        }, 4000); // Wait for recorder to initialize
     }, 3000);
     
     chrome.tabs.sendMessage(tabId, { 
@@ -119,10 +128,10 @@
     });
     
     setTimeout(async () => {
-        await chrome.storage.local.remove(['blockMeetAutoRecord', 'blockMeetAutoRecordUntil', 'isExtendingFromHuddle']);
+        await chrome.storage.local.remove(['blockMeetAutoRecord', 'blockMeetAutoRecordUntil', 'isExtendingFromHuddle', 'isForceRecordFromHuddle']);
         console.log("🔓 Meet auto-record UNBLOCKED");
     }, 15000);
-} else {
+}else {
                 console.log("⚠️ Extend flag expired - ignoring");
                 chrome.storage.local.remove(['isExtendingToMeet', 'extendTransitionTime']);
             }
@@ -812,9 +821,20 @@
                 }
 
                 if (message.action === "timerUpdate") {
-                    await chrome.storage.local.set({ recordingTime: message.time });
-                    return { success: true };
-                }
+    await chrome.storage.local.set({ recordingTime: message.time });
+    
+    // 🔥 NEW: Broadcast timer to ALL Meet tabs (including extended ones)
+    chrome.tabs.query({ url: "https://*.meet.google.com/*" }, (tabs) => {
+        tabs.forEach(tab => {
+            chrome.tabs.sendMessage(tab.id, {
+                action: "updateMeetTimer",
+                time: message.time
+            }).catch(() => {}); // Ignore errors if tab not ready
+        });
+    });
+    
+    return { success: true };
+}
 
                 return { success: false, reason: "unknown_action" };
             } catch (error) {
