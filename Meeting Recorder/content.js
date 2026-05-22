@@ -922,25 +922,31 @@ function checkMeetingState() {
             const leaveButton = findLeaveButton();
             const leaveVisible = leaveButton && isElementVisible(leaveButton);
             
-            if (leaveVisible && !lastLeaveButtonVisible) {
-                console.log("✅ Meeting joined (blocked mode - coming from Huddle)");
-                isInMeeting = true;
-                meetingStarted = true;
-                if (!meetingStartTime) {
-                    startMeetingTimer();
-                }
-                const startTime = new Date(meetingStartTime).toLocaleTimeString();
-                showMeetStatus(`📅 Meeting started at: ${startTime}\n🎬 Recording continuing from Huddle...`, 5000);
-            } else if (!leaveVisible && lastLeaveButtonVisible) {
-                console.log("❌ Meeting ended");
-                isInMeeting = false;
-                meetingStarted = false;
-                stopMeetingTimer();
-                if (recordingStarted) {
-                    console.log("🛑 Meeting ended - stopping recording");
-                    chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
-                }
-            }
+          if (leaveVisible && !lastLeaveButtonVisible) {
+    console.log("✅ Meeting joined (blocked mode - coming from Huddle)");
+    isInMeeting = true;
+    meetingStarted = true;
+    if (!meetingStartTime) {
+        startMeetingTimer();
+    }
+    const startTime = new Date(meetingStartTime).toLocaleTimeString();
+    showMeetStatus(`📅 Meeting started at: ${startTime}\n🎬 Recording continuing from Huddle...`, 5000);
+} else if (!leaveVisible && lastLeaveButtonVisible) {
+    console.log("❌ Meeting ended");
+    isInMeeting = false;
+    meetingStarted = false;
+    stopMeetingTimer();
+    
+    // 🔥 FIX: Always stop recording when meeting ends, regardless of how it started
+    if (recordingStarted) {
+        console.log("🛑 Meeting ended - stopping recording (recordingStarted=true)");
+        chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
+    } else {
+        // Even if recordingStarted is false, the recorder might still be active (forced recording)
+        console.log("🛑 Meeting ended - sending stop signal anyway (checking for active recorder)");
+        chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
+    }
+}
             
             lastLeaveButtonVisible = leaveVisible;
             chrome.storage.local.set({ isInMeeting });
@@ -1136,17 +1142,27 @@ async function startAutoRecording(forceRecord = false) {
         }
 
         function setupLeaveButtonObserver() {
-            if (leaveButtonObserver) leaveButtonObserver.disconnect();
-            leaveButtonObserver = new MutationObserver(() => {
-                setTimeout(checkMeetingState, 500);
-            });
-            leaveButtonObserver.observe(document.body, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['style', 'class', 'aria-hidden', 'disabled']
-            });
+    if (leaveButtonObserver) leaveButtonObserver.disconnect();
+    leaveButtonObserver = new MutationObserver(() => {
+        setTimeout(checkMeetingState, 500);
+    });
+    leaveButtonObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'aria-hidden', 'disabled']
+    });
+    
+    // 🔥 ADD: Direct leave button click listener for forced recordings
+    document.addEventListener('click', function(e) {
+        const leaveButton = e.target.closest('button[aria-label="Leave call"], button[aria-label*="Leave"]');
+        if (leaveButton) {
+            console.log("🚪 Leave button clicked directly - forcing stop");
+            // Always send stop signal, regardless of recordingStarted flag
+            chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
         }
+    }, true);
+}
 function checkInitialMeetingState() {
     // 🔥 FIRST: Check if we're extending from Huddle
     chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil'], async (extendResult) => {
