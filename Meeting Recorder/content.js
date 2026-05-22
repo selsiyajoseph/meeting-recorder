@@ -1345,14 +1345,43 @@ function checkInitialMeetingState() {
             }
             
             if (message.action === "updateMeetTimer") {
-                const status = document.getElementById('meet-recorder-status');
-                if (status && status.textContent.includes('Recording')) {
-                    status.textContent = `🔴 Recording... ${message.time}`;
-                } else if (isInMeeting && recordingStarted) {
-                    showMeetStatus(`🔴 Recording... ${message.time}`);
-                }
-                sendResponse({ success: true });
-            }
+    console.log(`⏱️ Timer update received: ${message.time}`);
+    
+    // Try to update existing status element
+    let status = document.getElementById('meet-recorder-status');
+    
+    if (status) {
+        // Update existing status
+        status.innerHTML = `🔴 Recording... ${message.time}`;
+    } else if (isInMeeting) {
+        // Create new status element (for forced recordings where recordingStarted might be false)
+        status = document.createElement('div');
+        status.id = 'meet-recorder-status';
+        status.style.cssText = `
+            position: fixed;
+            bottom: 70px;
+            right: 20px;
+            background: rgba(0,0,0,0.95);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-family: 'Google Sans', Arial, sans-serif;
+            font-size: 14px;
+            z-index: 100000;
+            font-weight: bold;
+            border: 2px solid #4285f4;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            backdrop-filter: blur(10px);
+            min-width: 180px;
+            text-align: center;
+        `;
+        status.innerHTML = `🔴 Recording... ${message.time}`;
+        document.body.appendChild(status);
+        console.log("✅ Created new timer display for forced recording");
+    }
+    
+    sendResponse({ success: true });
+}
             
             if (message.action === "recordingCompleted") {
                 recordingStarted = false;
@@ -1365,10 +1394,14 @@ function checkInitialMeetingState() {
             }
 
             if (message.action === "recordingStarted") {
-                recordingStarted = true;
-                console.log("✅ Meet page notified: Recording has started");
-                sendResponse({ success: true });
-            }
+    recordingStarted = true;
+    console.log("✅ Meet page notified: Recording has started");
+    
+    // 🔥 NEW: Show initial recording status immediately
+    showMeetStatus("🔴 Recording... 00:00");
+    
+    sendResponse({ success: true });
+}
 
             if (message.action === "forceResetAndRetry") {
                 console.log("📨 Received force reset command");
