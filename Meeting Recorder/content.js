@@ -44,7 +44,7 @@
         const fileSizeMB = (totalSize / 1024 / 1024).toFixed(2);
         
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const filename = customFilename || `huddle_recording_${timestamp}.webm`;
+        const filename = customFilename || `huddle-${timestamp}-part1.webm`;
         
         console.log(`💾 Preparing download: ${filename} (${fileSizeMB} MB)`);
         
@@ -250,35 +250,30 @@
             }, 1000);
         }
         
-     function setupExtendButtonDetection() {
-    console.log("🔍 Setting up Extend button detection");
-    
-    document.addEventListener('click', (e) => {
-        const extendButton = e.target.closest(
-            'button[aria-label="Move to a tab"], ' +
-            'button[jsname="f0nqNc"], ' +
-            'button[data-tooltip*="Move to a tab"]'
-        );
+        function setupExtendButtonDetection() {
+            console.log("🔍 Setting up Extend button detection");
+            
+            document.addEventListener('click', (e) => {
+                const extendButton = e.target.closest(
+                    'button[aria-label="Move to a tab"], ' +
+                    'button[jsname="f0nqNc"], ' +
+                    'button[data-tooltip*="Move to a tab"]'
+                );
 
         if (extendButton && isRecording && !hasAutoSaved) {
             console.log("🚀 EXTEND BUTTON CLICKED - Moving to Meet tab");
             
-            // Set flags to block Meet auto-record
+            // Set flag to indicate we're extending (will force Meet recording)
             chrome.storage.local.set({ 
                 isExtendingToMeet: true,
                 extendTransitionTime: Date.now(),
-                isExtendingFromHuddle: true,
-                extendCompleted: false,
-                blockMeetAutoRecord: true,
-                blockMeetAutoRecordUntil: Date.now() + 20000  // Block for 20 seconds
+                // forceMeetRecording: true  // NEW: Force Meet recording even if auto is OFF
             });
-            
-            console.log("🔒 Block flags set - Meet auto-record will be prevented");
             
             e.preventDefault();
             e.stopPropagation();
             
-            // Save Huddle recording
+            // ALWAYS save Huddle recording
             forceSaveAndStop("Extending to Meet - saving Huddle recording").then(() => {
                 setTimeout(() => {
                     try {
@@ -289,21 +284,21 @@
                 }, 500);
             });
         }
-    }, true);
-    
-    const extendObserver = new MutationObserver(() => {
-        const extendBtn = document.querySelector('button[aria-label="Move to a tab"], button[jsname="f0nqNc"]');
-        if (extendBtn && !extendBtn.hasAttribute('data-extend-listener')) {
-            extendBtn.setAttribute('data-extend-listener', 'true');
-            console.log("✅ Extend button detected");
+            }, true);
+            
+            const extendObserver = new MutationObserver(() => {
+                const extendBtn = document.querySelector('button[aria-label="Move to a tab"], button[jsname="f0nqNc"]');
+                if (extendBtn && !extendBtn.hasAttribute('data-extend-listener')) {
+                    extendBtn.setAttribute('data-extend-listener', 'true');
+                    console.log("✅ Extend button detected");
+                }
+            });
+            
+            extendObserver.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
         }
-    });
-    
-    extendObserver.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-}
 
 
         function setupLeaveButtonDetection() {
@@ -719,6 +714,20 @@
         let meetingEndTime = null;
         let totalMeetingDuration = 0;
 
+        let isExtendedFromHuddle = false;
+
+        async function checkIfExtendedFromHuddle() {
+            const result = await chrome.storage.local.get(['isExtendingToMeet', 'extendTransitionTime']);
+            if (result.isExtendingToMeet && result.extendTransitionTime) {
+                const timeSince = Date.now() - result.extendTransitionTime;
+                if (timeSince < 10000) {
+                    isExtendedFromHuddle = true;
+                    console.log("✅ This Meet tab was extended from Huddle");
+                    chrome.storage.local.remove(['isExtendingToMeet', 'extendTransitionTime']);
+                }
+            }
+        }
+
         function showMeetStatus(message, duration = 4000) {
             const existing = document.getElementById('meet-recorder-status');
             
@@ -809,38 +818,25 @@
         }
 
         async function initializeAutoRecord() {
-    await checkAutoRecordPermission();
-    
-    // 🔥 NEW: Check if we're extending from Huddle BEFORE proceeding
-    const blockResult = await chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil']);
-    const isExtending = blockResult.isExtendingFromHuddle === true;
-    const extendCompleted = blockResult.extendCompleted === true;
-    const shouldBlock = blockResult.blockMeetAutoRecord === true;
-    const blockUntil = blockResult.blockMeetAutoRecordUntil || 0;
-    const isBlocked = shouldBlock && (Date.now() < blockUntil);
-    
-    if (isBlocked || (isExtending && !extendCompleted)) {
-        console.log("🔒 initializeAutoRecord: BLOCKED - Extending from Huddle, skipping auto-record setup");
-        return; // EXIT - don't set up auto-record
-    }
-    
-    // If auto-record is enabled, immediately check if we're in a meeting
-    if (autoRecordEnabled) {
-        console.log("🔄 Auto-record enabled - checking current meeting state");
-        setTimeout(() => {
-            checkMeetingState();
-            // Force a re-check after a delay to catch any late-loading meetings
-            setTimeout(() => {
-                checkMeetingState();
-                // If we're in a meeting and auto-record is enabled, start recording
-                if (isInMeeting && autoRecordEnabled && !recordingStarted) {
-                    console.log("🚀 Auto-record enabled and in meeting - starting recording");
-                    startAutoRecording();
-                }
-            }, 3000);
-        }, 1000);
-    }
-}
+            await checkAutoRecordPermission();
+        
+            // If auto-record is enabled, immediately check if we're in a meeting
+            if (autoRecordEnabled) {
+                console.log("🔄 Auto-record enabled - checking current meeting state");
+                setTimeout(() => {
+                    checkMeetingState();
+                    // Force a re-check after a delay to catch any late-loading meetings
+                    setTimeout(() => {
+                        checkMeetingState();
+                        // If we're in a meeting and auto-record is enabled, start recording
+                        if (isInMeeting && autoRecordEnabled && !recordingStarted) {
+                            console.log("🚀 Auto-record enabled and in meeting - starting recording");
+                            startAutoRecording();
+                        }
+                    }, 3000);
+                }, 1000);
+            }
+        }
 
         async function checkAutoRecordPermission() {
             return new Promise((resolve) => {
@@ -853,31 +849,20 @@
         }
         
         function startAutoRecordingImmediately() {
-    // 🔥 NEW: Check if we should block
-    chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil'], (blockResult) => {
-        const isExtending = blockResult.isExtendingFromHuddle === true;
-        const extendCompleted = blockResult.extendCompleted === true;
-        const shouldBlock = blockResult.blockMeetAutoRecord === true;
-        const blockUntil = blockResult.blockMeetAutoRecordUntil || 0;
-        const isBlocked = shouldBlock && (Date.now() < blockUntil);
+            if (isInMeeting && autoRecordEnabled) {
+                console.log("🚀 Auto-record toggled ON mid-meeting - starting recording immediately");
+                // showMeetStatus("🟡 Auto recording starting now...");
+                // Force reset recording state to ensure fresh start
+                recordingStarted = false;
         
-        if (isBlocked || (isExtending && !extendCompleted)) {
-            console.log("🔒 startAutoRecordingImmediately: BLOCKED - Extending from Huddle");
-            return;
-        }
-        
-        if (isInMeeting && autoRecordEnabled) {
-            console.log("🚀 Auto-record toggled ON mid-meeting - starting recording immediately");
-            recordingStarted = false;
-    
-            if (window.autoRecordTimeout) {
-                clearTimeout(window.autoRecordTimeout);
-                window.autoRecordTimeout = null;
+                // Clear any existing recording timeouts
+                if (window.autoRecordTimeout) {
+                    clearTimeout(window.autoRecordTimeout);
+                    window.autoRecordTimeout = null;
+                }
+                startAutoRecording();
             }
-            startAutoRecording();
         }
-    });
-}
 
         function findLeaveButton() {
             const selectors = [
@@ -905,109 +890,60 @@
                    rect.height > 0 &&
                    element.offsetParent !== null;
         }        
-function checkMeetingState() {
-    // 🔥 FIRST: Check if we're extending from Huddle (runs synchronously with proper handling)
-    chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil'], async (extendResult) => {
-        const isExtending = extendResult.isExtendingFromHuddle === true;
-        const extendCompleted = extendResult.extendCompleted === true;
-        const shouldBlock = extendResult.blockMeetAutoRecord === true;
-        const blockUntil = extendResult.blockMeetAutoRecordUntil || 0;
-        const isBlocked = shouldBlock && (Date.now() < blockUntil);
-        
-        // If blocked or extending, handle specially
-        if (isBlocked || (isExtending && !extendCompleted)) {
-            console.log("🔒 Meet auto-record BLOCKED - Extending from Huddle");
-            
-            // Still need to track meeting state for UI, but don't auto-record
+
+        function checkMeetingState() {
+
             const leaveButton = findLeaveButton();
             const leaveVisible = leaveButton && isElementVisible(leaveButton);
-            
-          if (leaveVisible && !lastLeaveButtonVisible) {
-    console.log("✅ Meeting joined (blocked mode - coming from Huddle)");
-    isInMeeting = true;
-    meetingStarted = true;
-    if (!meetingStartTime) {
-        startMeetingTimer();
-    }
-    const startTime = new Date(meetingStartTime).toLocaleTimeString();
-    showMeetStatus(`📅 Meeting started at: ${startTime}\n🎬 Recording continuing from Huddle...`, 5000);
-} else if (!leaveVisible && lastLeaveButtonVisible) {
-    console.log("❌ Meeting ended");
-    isInMeeting = false;
-    meetingStarted = false;
-    stopMeetingTimer();
-    
-    // 🔥 FIX: Always stop recording when meeting ends, regardless of how it started
-    if (recordingStarted) {
-        console.log("🛑 Meeting ended - stopping recording (recordingStarted=true)");
-        chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
-    } else {
-        // Even if recordingStarted is false, the recorder might still be active (forced recording)
-        console.log("🛑 Meeting ended - sending stop signal anyway (checking for active recorder)");
-        chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
-    }
-}
-            
-            lastLeaveButtonVisible = leaveVisible;
-            chrome.storage.local.set({ isInMeeting });
-            return; // EXIT - don't proceed with auto-record
-        }
-        
-        // ============================================
-        // NORMAL MEETING DETECTION (Original logic)
-        // ============================================
-        const leaveButton = findLeaveButton();
-        const leaveVisible = leaveButton && isElementVisible(leaveButton);
 
-        if (leaveVisible && !lastLeaveButtonVisible) {
-            console.log("✅ Leave button visible - Meeting joined");
-            isInMeeting = true;
-            meetingStarted = true;
-            startMeetingTimer();
+            if (leaveVisible && !lastLeaveButtonVisible) {
+                console.log("✅ Leave button visible - Meeting joined");
+                isInMeeting = true;
+                meetingStarted = true;
+                startMeetingTimer();
 
-            const startTime = new Date(meetingStartTime).toLocaleTimeString();
-            
-            if (autoRecordEnabled && !recordingStarted) {
-                console.log("🔄 Auto-record enabled - starting recording in 3 seconds...");
-                showMeetStatus(`📅 Meeting started at: ${startTime}\n🟡 Auto recording starting in 3 seconds...`);
+                const startTime = new Date(meetingStartTime).toLocaleTimeString();
+                
+                if (autoRecordEnabled && !recordingStarted) {
+                    console.log("🔄 Auto-record enabled - starting recording in 3 seconds...");
+                    showMeetStatus(`📅 Meeting started at: ${startTime}\n🟡 Auto recording starting in 3 seconds...`);
 
-                // Clear any existing timeout
+                    // Clear any existing timeout
+                    if (window.autoRecordTimeout) {
+                        clearTimeout(window.autoRecordTimeout);
+                    }
+                    
+                    window.autoRecordTimeout = setTimeout(async () => {
+                        if (isInMeeting && autoRecordEnabled && !recordingStarted) {
+                            await startAutoRecording();
+                        }
+                    }, 3000);
+                } else {
+                    showMeetStatus(`📅 Meeting started at: ${startTime}`, 5000);
+                }
+            }
+
+            if (!leaveVisible && lastLeaveButtonVisible) {
+                console.log("❌ Leave button hidden - Meeting ended");
+                isInMeeting = false;
+                meetingStarted = false;
+                stopMeetingTimer();
+                
+                // Clear auto-record timeout if meeting ended
                 if (window.autoRecordTimeout) {
                     clearTimeout(window.autoRecordTimeout);
+                    window.autoRecordTimeout = null;
                 }
-                
-                window.autoRecordTimeout = setTimeout(async () => {
-                    if (isInMeeting && autoRecordEnabled && !recordingStarted) {
-                        await startAutoRecording();
-                    }
-                }, 3000);
-            } else {
-                showMeetStatus(`📅 Meeting started at: ${startTime}`, 5000);
+        
+                if (recordingStarted) {
+                    console.log("🛑 Meeting ended - stopping recording");
+                    chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
+                }
             }
-        }
 
-        if (!leaveVisible && lastLeaveButtonVisible) {
-            console.log("❌ Leave button hidden - Meeting ended");
-            isInMeeting = false;
-            meetingStarted = false;
-            stopMeetingTimer();
-            
-            // Clear auto-record timeout if meeting ended
-            if (window.autoRecordTimeout) {
-                clearTimeout(window.autoRecordTimeout);
-                window.autoRecordTimeout = null;
-            }
-    
-            if (recordingStarted) {
-                console.log("🛑 Meeting ended - stopping recording");
-                chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
-            }
+            lastLeaveButtonVisible = leaveVisible;
+            chrome.storage.local.set({ isInMeeting });
         }
-
-        lastLeaveButtonVisible = leaveVisible;
-        chrome.storage.local.set({ isInMeeting });
-    });
-}
 
         function forceMeetingRedetection() {
             console.log("🔍 Force re-detecting meeting state...");
@@ -1042,63 +978,48 @@ function checkMeetingState() {
                 }, 2000);
             }, 1000);
         }
-async function startAutoRecording(forceRecord = false) {
-    // 🔥 If this is a forced recording, skip block check
-    if (!forceRecord) {
-        const blockResult = await chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil']);
-        const isExtending = blockResult.isExtendingFromHuddle === true;
-        const extendCompleted = blockResult.extendCompleted === true;
-        const shouldBlock = blockResult.blockMeetAutoRecord === true;
-        const blockUntil = blockResult.blockMeetAutoRecordUntil || 0;
-        const isBlocked = shouldBlock && (Date.now() < blockUntil);
-        
-        if (isBlocked || (isExtending && !extendCompleted)) {
-            console.log("🔒 startAutoRecording: BLOCKED - Extending from Huddle");
-            return;
-        }
-    } else {
-        console.log("🔥 FORCED startAutoRecording - ignoring block check");
-    }
-    
-    // 🔥 END OF NEW BLOCK - Everything below is your original code
-    
-    if (recordingStarted) {
-        console.log("⚠️ Auto recording already started, skipping");
-        return;
-    }
-    
-    console.log("🚀 Starting auto recording...");
 
-    chrome.storage.local.set({ isRecording: false });
+        async function startAutoRecording() {
+            if (recordingStarted) {
+                console.log("⚠️ Auto recording already started, skipping");
+                return;
+            }
+            
+            console.log("🚀 Starting auto recording...");
 
-    
-    try {
-        const response = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ action: "autoStartRecording" }, resolve);
-        });
-        
-        if (response?.success) {
-            recordingStarted = true;            
-            chrome.storage.local.set({ isRecording: true });
+            chrome.storage.local.set({ isRecording: false });
 
-        } else {
-            console.log("❌ Failed to start auto recording:", response);
-            recordingStarted = false;
-            showMeetStatus("❌ Auto Recording Failed");
-            // Retry after 3 seconds if failed
-            setTimeout(() => {
-                if (isInMeeting && autoRecordEnabled && !recordingStarted) {
-                    console.log("🔄 Retrying auto recording...");
-                    startAutoRecording();
+            
+            try {
+                const response = await new Promise((resolve) => {
+                    chrome.runtime.sendMessage({ 
+                        action: "autoStartRecording",
+                        extended: isExtendedFromHuddle
+                    }, resolve);
+                });
+                
+                if (response?.success) {
+                    recordingStarted = true;            
+                    chrome.storage.local.set({ isRecording: true });
+
+                } else {
+                    console.log("❌ Failed to start auto recording:", response);
+                    recordingStarted = false;
+                    showMeetStatus("❌ Auto Recording Failed");
+                    // Retry after 3 seconds if failed
+                    setTimeout(() => {
+                        if (isInMeeting && autoRecordEnabled && !recordingStarted) {
+                            console.log("🔄 Retrying auto recording...");
+                            startAutoRecording();
+                        }
+                    }, 3000);
                 }
-            }, 3000);
+            } catch (error) {
+                console.log("❌ Error starting auto recording:", error);
+                recordingStarted = false;
+                showMeetStatus("❌ Auto Recording Error");
+            }
         }
-    } catch (error) {
-        console.log("❌ Error starting auto recording:", error);
-        recordingStarted = false;
-        showMeetStatus("❌ Auto Recording Error");
-    }
-}
 
         async function initializeWithStateRecovery() {
             await checkAutoRecordPermission();
@@ -1142,79 +1063,40 @@ async function startAutoRecording(forceRecord = false) {
         }
 
         function setupLeaveButtonObserver() {
-    if (leaveButtonObserver) leaveButtonObserver.disconnect();
-    leaveButtonObserver = new MutationObserver(() => {
-        setTimeout(checkMeetingState, 500);
-    });
-    leaveButtonObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class', 'aria-hidden', 'disabled']
-    });
-    
-    // 🔥 ADD: Direct leave button click listener for forced recordings
-    document.addEventListener('click', function(e) {
-        const leaveButton = e.target.closest('button[aria-label="Leave call"], button[aria-label*="Leave"]');
-        if (leaveButton) {
-            console.log("🚪 Leave button clicked directly - forcing stop");
-            // Always send stop signal, regardless of recordingStarted flag
-            chrome.runtime.sendMessage({ action: "stopRecordingOnMeetingEnd" });
+            if (leaveButtonObserver) leaveButtonObserver.disconnect();
+            leaveButtonObserver = new MutationObserver(() => {
+                setTimeout(checkMeetingState, 500);
+            });
+            leaveButtonObserver.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['style', 'class', 'aria-hidden', 'disabled']
+            });
         }
-    }, true);
-}
-function checkInitialMeetingState() {
-    // 🔥 FIRST: Check if we're extending from Huddle
-    chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil'], async (extendResult) => {
-        const isExtending = extendResult.isExtendingFromHuddle === true;
-        const extendCompleted = extendResult.extendCompleted === true;
-        const shouldBlock = extendResult.blockMeetAutoRecord === true;
-        const blockUntil = extendResult.blockMeetAutoRecordUntil || 0;
-        const isBlocked = shouldBlock && (Date.now() < blockUntil);
-        
-        // If blocked or extending, don't auto-record
-        if (isBlocked || (isExtending && !extendCompleted)) {
-            console.log("🔒 Initial check: Meet auto-record BLOCKED - Extending from Huddle");
+
+        function checkInitialMeetingState() {
             const leaveButton = findLeaveButton();
             const leaveVisible = leaveButton && isElementVisible(leaveButton);
             
             if (leaveVisible && !isInMeeting) {
-                console.log("🔍 Already in meeting but auto-record is BLOCKED (coming from Huddle)");
+                console.log("🔍 Already in meeting - will auto-start recording in 3 seconds");
                 isInMeeting = true;
                 meetingStarted = true;
+                
                 if (!meetingStartTime) {
                     startMeetingTimer();
                 }
-                showMeetStatus("📅 Meeting continuing from Huddle - Recording active", 3000);
-            }
-            return; // EXIT - don't start auto-record
-        }
-        
-        // ============================================
-        // NORMAL INITIAL CHECK (Original logic)
-        // ============================================
-        const leaveButton = findLeaveButton();
-        const leaveVisible = leaveButton && isElementVisible(leaveButton);
-        
-        if (leaveVisible && !isInMeeting) {
-            console.log("🔍 Already in meeting - will auto-start recording in 3 seconds");
-            isInMeeting = true;
-            meetingStarted = true;
-            
-            if (!meetingStartTime) {
-                startMeetingTimer();
-            }
-            
-            if (autoRecordEnabled && !recordingStarted) {
-                console.log("🚀 Auto-starting recording for existing meeting");
-                showMeetStatus("🟡 Auto recording starting in 3 seconds...", 3000);
-                setTimeout(async () => {
-                    await startAutoRecording();
-                }, 3000);
+                
+                if (autoRecordEnabled && !recordingStarted) {
+                    console.log("🚀 Auto-starting recording for existing meeting");
+                    // showMeetStatus("🟡 Auto recording starting in 3 seconds...", 3000);
+                    setTimeout(async () => {
+                        await startAutoRecording();
+                    }, 3000);
+                }
             }
         }
-    });
-}
 
         function getMuteStatus() {
             const muteButton = document.querySelector('[aria-label*="microphone"]') || 
@@ -1345,43 +1227,14 @@ function checkInitialMeetingState() {
             }
             
             if (message.action === "updateMeetTimer") {
-    console.log(`⏱️ Timer update received: ${message.time}`);
-    
-    // Try to update existing status element
-    let status = document.getElementById('meet-recorder-status');
-    
-    if (status) {
-        // Update existing status
-        status.innerHTML = `🔴 Recording... ${message.time}`;
-    } else if (isInMeeting) {
-        // Create new status element (for forced recordings where recordingStarted might be false)
-        status = document.createElement('div');
-        status.id = 'meet-recorder-status';
-        status.style.cssText = `
-            position: fixed;
-            bottom: 70px;
-            right: 20px;
-            background: rgba(0,0,0,0.95);
-            color: white;
-            padding: 12px 16px;
-            border-radius: 10px;
-            font-family: 'Google Sans', Arial, sans-serif;
-            font-size: 14px;
-            z-index: 100000;
-            font-weight: bold;
-            border: 2px solid #4285f4;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            backdrop-filter: blur(10px);
-            min-width: 180px;
-            text-align: center;
-        `;
-        status.innerHTML = `🔴 Recording... ${message.time}`;
-        document.body.appendChild(status);
-        console.log("✅ Created new timer display for forced recording");
-    }
-    
-    sendResponse({ success: true });
-}
+                const status = document.getElementById('meet-recorder-status');
+                if (status && status.textContent.includes('Recording')) {
+                    status.textContent = `🔴 Recording... ${message.time}`;
+                } else if (isInMeeting && recordingStarted) {
+                    showMeetStatus(`🔴 Recording... ${message.time}`);
+                }
+                sendResponse({ success: true });
+            }
             
             if (message.action === "recordingCompleted") {
                 recordingStarted = false;
@@ -1394,14 +1247,10 @@ function checkInitialMeetingState() {
             }
 
             if (message.action === "recordingStarted") {
-    recordingStarted = true;
-    console.log("✅ Meet page notified: Recording has started");
-    
-    // 🔥 NEW: Show initial recording status immediately
-    showMeetStatus("🔴 Recording... 00:00");
-    
-    sendResponse({ success: true });
-}
+                recordingStarted = true;
+                console.log("✅ Meet page notified: Recording has started");
+                sendResponse({ success: true });
+            }
 
             if (message.action === "forceResetAndRetry") {
                 console.log("📨 Received force reset command");
@@ -1416,6 +1265,14 @@ function checkInitialMeetingState() {
         setTimeout(async () => {
             await initializeWithStateRecovery();
             await initializeAutoRecord();
+            await checkIfExtendedFromHuddle();
+
+            // If this tab was extended from a Huddle, force start recording even if auto-record is OFF
+            if (isExtendedFromHuddle) {
+                console.log("🚀 Force starting recording (extended from Huddle) - auto-record ignored");
+                startAutoRecording();
+            }
+            
             console.log("🔍 Meet Auto Recorder content script fully loaded with state recovery");
         /*
             // Show initial status based on auto-record setting
@@ -1470,7 +1327,7 @@ function checkInitialMeetingState() {
             status.innerHTML = message.replace(/\n/g, '<br>');
             status.style.cssText = `
                 position: fixed;
-                top: 150px;
+                bottom: 50px;
                 right: 20px;
                 background: rgba(0,0,0,0.95);
                 color: white;
@@ -1523,40 +1380,20 @@ function checkInitialMeetingState() {
         }
 
         async function initializeAutoRecord() {
-    await checkAutoRecordPermission();
-    
-    // 🔥 NEW: Check if we should block (ADD THIS BLOCK)
-    const blockResult = await chrome.storage.local.get(['isExtendingFromHuddle', 'extendCompleted', 'blockMeetAutoRecord', 'blockMeetAutoRecordUntil']);
-    const isExtending = blockResult.isExtendingFromHuddle === true;
-    const extendCompleted = blockResult.extendCompleted === true;
-    const shouldBlock = blockResult.blockMeetAutoRecord === true;
-    const blockUntil = blockResult.blockMeetAutoRecordUntil || 0;
-    const isBlocked = shouldBlock && (Date.now() < blockUntil);
-    
-    if (isBlocked || (isExtending && !extendCompleted)) {
-        console.log("🔒 initializeAutoRecord: BLOCKED - Extending from Huddle, skipping auto-record setup");
-        return; // EXIT - don't set up auto-record
-    }
-    
-    // 🔥 END OF NEW BLOCK - Everything below is your original code
-    
-    // If auto-record is enabled, immediately check if we're in a meeting
-    if (autoRecordEnabled) {
-        console.log("🔄 Auto-record enabled - checking current meeting state");
-        setTimeout(() => {
-            checkMeetingState();
-            // Force a re-check after a delay to catch any late-loading meetings
-            setTimeout(() => {
-                checkMeetingState();
-                // If we're in a meeting and auto-record is enabled, start recording
-                if (isInMeeting && autoRecordEnabled && !recordingStarted) {
-                    console.log("🚀 Auto-record enabled and in meeting - starting recording");
-                    startAutoRecording();
-                }
-            }, 3000);
-        }, 1000);
-    }
-}
+            //await checkAutoRecordPermision();
+        
+            // If auto-record is enabled, immediately check meeting status
+            if (autoRecordEnabled) {
+                console.log("🔄 Auto-record enabled - checking current meeting state");
+                setTimeout(() => {
+                    handleMidMeetingAutoRecord();
+                    // Additional check after everything loads
+                    setTimeout(() => {
+                        handleMidMeetingAutoRecord();
+                    }, 5000);
+                }, 2000);
+            }
+        }
 
         async function checkAutoRecordPermission() {
             return new Promise((resolve) => {
@@ -1664,13 +1501,17 @@ function checkInitialMeetingState() {
             
             while (target && target !== document.body) {
                 if (isLeaveButton(target)) {
-                    console.log("🛑 LEAVE BUTTON CLICKED - Meeting ended by user");
-
-                     if (recordingStarted && !autoRecordEnabled) {
-                        console.log("🛑 Manual recording active - will stop recording");
-                        // The meetingEnded() function will handle stopping the recording
+                    // Check if this is the "End meeting" menu item (opens confirmation dialog)
+                    const dataTid = target.getAttribute('data-tid') || '';
+                    if (dataTid === 'hangup-end-meeting-btn') {
+                        console.log("📋 End meeting clicked – waiting for confirmation");
+                        // Don't stop recording yet – wait for "End" in dialog
+                        waitForEndConfirmation();
+                        break;
                     }
-        
+                    
+                    // For direct Leave button or "Leave" menu item – stop immediately
+                    console.log("🛑 LEAVE BUTTON CLICKED - Meeting ended by user");
                     meetingEnded();
                     break;
                 }
@@ -1678,21 +1519,62 @@ function checkInitialMeetingState() {
             }
         }
 
+        function waitForEndConfirmation() {
+            // Look for the "End" button in the confirmation dialog
+            const checkInterval = setInterval(() => {
+                const endButton = document.querySelector('[data-tid="endCallConfirmationBtn"]');
+                if (endButton) {
+                    clearInterval(checkInterval);
+                    console.log("✅ End confirmation dialog detected – attaching listener");
+                    
+                    const clickHandler = (e) => {
+                        if (e.target.closest('[data-tid="endCallConfirmationBtn"]')) {
+                            console.log("🛑 User confirmed END – stopping recording");
+                            meetingEnded();
+                            // Clean up
+                            document.removeEventListener('click', clickHandler, true);
+                        }
+                    };
+                    // Use capturing to catch the click even if it's inside shadow DOM
+                    document.addEventListener('click', clickHandler, true);
+                    
+                    // Also handle dialog close without ending (e.g., Esc or Cancel)
+                    // The "Cancel" button has data-tid="cancelEndCallConfirmationBtn" – we ignore it.
+                }
+            }, 200); // check every 200ms for the dialog to appear
+        }
+
         function isLeaveButton(element) {
             if (!element) return false;
-            if (element.id === 'hangup-button') return true;
             
-            const ariaLabel = element.getAttribute('aria-label') || '';
-            const title = element.getAttribute('title') || '';
             const dataTid = element.getAttribute('data-tid') || '';
+            const ariaLabel = element.getAttribute('aria-label') || '';
+            const text = element.textContent || '';
+            const role = element.getAttribute('role') || '';
             
-            return ariaLabel.toLowerCase().includes('leave') ||
-                   ariaLabel.toLowerCase().includes('hang up') ||
-                   title.toLowerCase().includes('leave') ||
-                   title.toLowerCase().includes('hang up') ||
-                   dataTid.includes('hangup') ||
-                   element.classList.contains('hangup-button');
+            // 1. Exclude the dropdown toggle button (opens the menu)
+            if (dataTid.includes('more-options') || ariaLabel.toLowerCase().includes('options')) {
+                return false;
+            }
+            
+            // 2. Main visible "Leave" button
+            if (dataTid === 'hangup-main-btn' || element.id === 'hangup-button') {
+                return true;
+            }
+            
+            // 3. Menu items: "Leave" or "End meeting"
+            if (role === 'menuitem' && (dataTid === 'hangup-leave-call-btn' || dataTid === 'hangup-end-meeting-btn')) {
+                return true;
+            }
+            
+            // 4. Fallback for menu items by text (in case data-tid changes)
+            if (role === 'menuitem' && (text.includes('Leave') || text.includes('End meeting'))) {
+                return true;
+            }
+            
+            return false;
         }
+
 
         function meetingStarted() {
             if (isInMeeting) return;
@@ -2274,6 +2156,7 @@ function checkInitialMeetingState() {
         let micActivityCheckInterval = null;
         let micMonitoringActive = false;
         let lastMuteState = null;
+        let isZoomStartingRecording = false;
 
         function isMeetingPage() {
             const url = location.href;
@@ -2609,23 +2492,24 @@ function checkInitialMeetingState() {
         }
 
         function meetingStarted() {
-            if (isInMeeting && recordingStarted) return;
+    if (isInMeeting && recordingStarted) return;
 
-            console.log("🎯 ZOOM MEETING STARTED");
-            isInMeeting = true;
+    console.log("🎯 ZOOM MEETING STARTED");
+    isInMeeting = true;
 
-            startMicrophoneMonitoring();
+    startMicrophoneMonitoring();
 
-            checkAutoRecordPermission().then(() => {
-                if (autoRecordEnabled && !recordingStarted) {
-                    console.log("🎬 ZOOM AUTO RECORDING STARTING");
-                    startAutoRecording();
-                }
-            });
-
-            showMeetingNotification("started");
-            chrome.storage.local.set({ isInMeeting: isInMeeting });
+    checkAutoRecordPermission().then(() => {
+        // ADD THE LOCK CHECK HERE
+        if (autoRecordEnabled && !recordingStarted && !isZoomStartingRecording) {
+            console.log("🎬 ZOOM AUTO RECORDING STARTING");
+            startAutoRecording();
         }
+    });
+
+    showMeetingNotification("started");
+    chrome.storage.local.set({ isInMeeting: isInMeeting });
+}
 
         function meetingEnded() {
             if (!isInMeeting) return;
@@ -2650,40 +2534,49 @@ function checkInitialMeetingState() {
             chrome.storage.local.set({ isInMeeting: isInMeeting });
         }
 
-        function startAutoRecording() {
-            if (recordingStarted) {
-                console.log("⚠️ Zoom: Already recording, ignoring start request");
-                return;
-            }
-            
-            console.log("🎬 Zoom: Starting auto recording...");
-            recordingStarted = true;
-            
-            showRecordingPopup();
-            /*
-            // Only show auto-recording status if auto-record is enabled
-            if (autoRecordEnabled) {
-                showZoomStatus("🔴 Auto Recording Started");
-            } else {
-                showZoomStatus("🔴 Recording Started");
-            }
-            */
 
-            chrome.runtime.sendMessage({ 
-                action: "autoStartRecording",
-                service: 'zoom'
-            }, (response) => {
-                if (response && response.success) {
-                    console.log("✅ Zoom: Recording started successfully");
-                    showRecordingNotification("started");
-                } else {
-                    console.log("❌ Zoom: Recording failed to start");
-                    recordingStarted = false;
-                    hideRecordingPopup();
-                    showZoomStatus("❌ Auto Recording Failed");
-                }
-            });
+
+
+// Then replace the startAutoRecording function:
+function startAutoRecording() {
+    if (recordingStarted) {
+        console.log("⚠️ Zoom: Already recording, ignoring start request");
+        return;
+    }
+    
+    // ADD THIS - Prevents duplicate start attempts
+    if (isZoomStartingRecording) {
+        console.log("⚠️ Zoom: Already starting recording, ignoring duplicate");
+        return;
+    }
+    
+    console.log("🎬 Zoom: Starting auto recording...");
+    isZoomStartingRecording = true;
+    recordingStarted = true;
+    
+    showRecordingPopup();
+    
+    chrome.runtime.sendMessage({ 
+        action: "autoStartRecording",
+        service: 'zoom'
+    }, (response) => {
+        if (response && response.success) {
+            console.log("✅ Zoom: Recording started successfully");
+            showRecordingNotification("started");
+        } else {
+            console.log("❌ Zoom: Recording failed to start");
+            recordingStarted = false;
+            isZoomStartingRecording = false;
+            hideRecordingPopup();
+            showZoomStatus("❌ Auto Recording Failed");
         }
+    });
+    
+    // Reset lock after 5 seconds
+    setTimeout(() => {
+        isZoomStartingRecording = false;
+    }, 5000);
+}
 
         function stopAutoRecording() {
             if (!recordingStarted) {
@@ -2826,19 +2719,24 @@ function checkInitialMeetingState() {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log("📨 Zoom content script received:", message.action);
             
-            if (message.action === "updateAutoRecordPermission") {
-                autoRecordEnabled = message.enabled;
-                console.log("🔐 Zoom: Auto record permission updated:", autoRecordEnabled);
-                
-                // Show appropriate status when permission changes
-                if (autoRecordEnabled) {
-                    showZoomStatus("✅ Auto Recording Enabled for Zoom", 4000);
-                } else {
-                    showZoomStatus("✅ Auto Recording Disabled for Zoom", 4000);
-                }
+           if (message.action === "updateAutoRecordPermission") {
+    autoRecordEnabled = message.enabled;
+    console.log("🔐 Zoom: Auto record permission updated:", autoRecordEnabled);
     
-                sendResponse({ success: true });
-            }
+    // Show appropriate status when permission changes
+    if (autoRecordEnabled) {
+        showZoomStatus("✅ Auto Recording Enabled for Zoom", 4000);
+        // NEW: If enabled while already in a meeting and not recording, start immediately
+        if (isInMeeting && !recordingStarted) {
+            console.log("🚀 Zoom: Auto-record enabled mid-meeting - starting recording immediately");
+            startAutoRecording();
+        }
+    } else {
+        showZoomStatus("✅ Auto Recording Disabled for Zoom", 4000);
+    }
+
+    sendResponse({ success: true });
+}
 
             if (message.action === "getZoomMuteStatus") {
                 // Get current mute state from the monitored variable
@@ -3019,5 +2917,3 @@ function checkInitialMeetingState() {
         console.log("🔍 Zoom Auto Recorder content script loaded");
     }
 })();
-
-
