@@ -8,7 +8,7 @@
     let isAutoRecording = false;
     let autoStartTimeout = null;
     let autoRecordPermissions = {};
-    let isZoomStarting = false;
+    let pendingZoomRecordingTabs = new Set();
     
     // Service detection
     function detectService(url) {
@@ -418,42 +418,25 @@
         }
     }
 
-  
-
-
-// Then replace the handleZoomAutoStart function with this:
-async function handleZoomAutoStart(sender) {
-    const timestamp = new Date().toLocaleTimeString();
-    console.log(`🎬 Auto starting recording for Zoom at ${timestamp}`);
-    console.log("📍 Source tab:", sender.tab.id, sender.tab.url);
-    
-    // ADD THIS LOCK - Prevents multiple recorder tabs
-    if (isZoomStarting) {
-        console.log("⚠️ Zoom already starting a recording, ignoring duplicate request");
-        return { success: false, reason: "already_starting" };
+    async function handleZoomAutoStart(sender) {
+        const timestamp = new Date().toLocaleTimeString();
+        console.log(`🎬 Auto starting recording for Zoom at ${timestamp}`);
+        console.log("📍 Source tab:", sender.tab.id, sender.tab.url);
+        
+        const result = await chrome.storage.local.get(['isRecording']);
+        if (result.isRecording) {
+            console.log("⚠️ Already recording - ignoring Zoom auto-record request");
+            return { success: false, reason: "already_recording" };
+        }
+        
+        if (currentRecordingTab && !isAutoRecording) {
+            console.log("⚠️ Already recording in tab:", currentRecordingTab);
+            return { success: false, reason: "already_recording" };
+        }
+        
+        startRecordingForTab(sender.tab.id, 'zoom', true);
+        return { success: true };
     }
-    
-    const result = await chrome.storage.local.get(['isRecording']);
-    if (result.isRecording) {
-        console.log("⚠️ Already recording - ignoring Zoom auto-record request");
-        return { success: false, reason: "already_recording" };
-    }
-    
-    if (currentRecordingTab && !isAutoRecording) {
-        console.log("⚠️ Already recording in tab:", currentRecordingTab);
-        return { success: false, reason: "already_recording" };
-    }
-    
-    isZoomStarting = true;
-    startRecordingForTab(sender.tab.id, 'zoom', true);
-    
-    // Reset lock after 5 seconds
-    setTimeout(() => {
-        isZoomStarting = false;
-    }, 5000);
-    
-    return { success: true };
-}
 
     function notifyAllZoomTabs(enabled) {
         chrome.tabs.query({url: ["https://*.zoom.us/*", "https://*.zoom.com/*"]}, (tabs) => {
@@ -468,6 +451,18 @@ async function handleZoomAutoStart(sender) {
 
     // ==================== COMMON FUNCTIONS ====================
     function startRecordingForTab(tabId, service, isAuto = false, extended = false) {
+        // ZOOM: prevent duplicate starts for the same tab
+        if (service === 'zoom') {
+            if (pendingZoomRecordingTabs.has(tabId)) {
+                console.log(`⚠️ Zoom tab ${tabId} already pending – skipping duplicate start`);
+                return;
+            }
+            pendingZoomRecordingTabs.add(tabId);
+            // Remove from set after 10 seconds (safety cleanup)
+            setTimeout(() => {
+                pendingZoomRecordingTabs.delete(tabId);
+            }, 10000);
+        }
         if (currentRecordingTab && !isAuto) {
             console.log("⚠️ Already recording in tab:", currentRecordingTab);
             return;
