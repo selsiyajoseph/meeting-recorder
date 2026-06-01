@@ -10,6 +10,32 @@
     'use strict';
 
     const currentUrl = window.location.href;
+    const isZoomPage = currentUrl.includes('zoom.us') || currentUrl.includes('zoom.com');
+    const isHuddlePage = currentUrl.includes('meet.google.com/_/frame');
+    
+    // ===== ZOOM: Run in ALL frames (for mute detection) but only show UI in MAIN frame =====
+    if (isZoomPage) {
+        // Mark if this is the main frame or iframe
+        const isMainFrame = (window === window.top);
+        
+        // Set a flag to identify this frame's purpose
+        if (isMainFrame) {
+            window.__zoomIsMainFrame = true;
+            console.log("✅ Zoom: Main frame - UI and mute detection enabled");
+        } else {
+            window.__zoomIsMainFrame = false;
+            console.log("🔇 Zoom: Iframe - mute detection only (no UI)");
+        }
+        
+        // Prevent duplicate loading in same frame
+        if (window.__zoomContentLoaded) {
+            console.log("🔇 Zoom: Already loaded in this frame");
+            return;
+        }
+        window.__zoomContentLoaded = true;
+    }
+
+   
     const isInIframe = window !== window.top;
     
     // Check if we're in the Huddle iframe
@@ -1158,6 +1184,13 @@
             if (message.action === "updateAutoRecordPermission") {
                 autoRecordEnabled = message.enabled;
                 console.log(`🔄 Auto record permission updated for ${currentService}:`, autoRecordEnabled);
+                
+                // NEW: If enabled while already in a meeting and not recording, start immediately
+                if (autoRecordEnabled && isInMeeting && !recordingStarted) {
+                    console.log("🚀 Auto-record enabled mid-meeting - starting recording immediately");
+                    startAutoRecordingImmediately();
+                }
+                
                 sendResponse({ success: true });
             }
 
@@ -1574,7 +1607,6 @@
             
             return false;
         }
-
 
         function meetingStarted() {
             if (isInMeeting) return;
@@ -2147,6 +2179,13 @@
     function zoomContent() {
         console.log("🔍 Initializing Zoom content script");
 
+    // Determine if we should show UI (status messages, timer)
+    // UI should ONLY appear in the main frame, NOT in iframes
+    const shouldShowUI = (window.__zoomIsMainFrame === true);
+    
+    if (!shouldShowUI) {
+        console.log("🔇 Zoom iframe: Running mute detection only (no UI elements)");
+    }
         let isInMeeting = false;
         let recordingStarted = false;
         let autoRecordEnabled = false;
@@ -2156,7 +2195,6 @@
         let micActivityCheckInterval = null;
         let micMonitoringActive = false;
         let lastMuteState = null;
-        let isZoomStartingRecording = false;
 
         function isMeetingPage() {
             const url = location.href;
@@ -2205,6 +2243,11 @@
 
         // ==================== ZOOM STATUS FUNCTIONS ====================
         function showZoomStatus(message, duration = 4000) {
+            // Skip UI if this is an iframe (prevents duplicates)
+        if (!shouldShowUI) {
+            console.log("🔇 Zoom iframe: Skipping UI display");
+            return;
+        }
             // For recording timer, use the blue style
             if (message.includes("Recording...")) {
                 let status = document.getElementById('zoom-recorder-status');
@@ -2492,24 +2535,23 @@
         }
 
         function meetingStarted() {
-    if (isInMeeting && recordingStarted) return;
+            if (isInMeeting && recordingStarted) return;
 
-    console.log("🎯 ZOOM MEETING STARTED");
-    isInMeeting = true;
+            console.log("🎯 ZOOM MEETING STARTED");
+            isInMeeting = true;
 
-    startMicrophoneMonitoring();
+            startMicrophoneMonitoring();
 
-    checkAutoRecordPermission().then(() => {
-        // ADD THE LOCK CHECK HERE
-        if (autoRecordEnabled && !recordingStarted && !isZoomStartingRecording) {
-            console.log("🎬 ZOOM AUTO RECORDING STARTING");
-            startAutoRecording();
+            checkAutoRecordPermission().then(() => {
+                if (autoRecordEnabled && !recordingStarted) {
+                    console.log("🎬 ZOOM AUTO RECORDING STARTING");
+                    startAutoRecording();
+                }
+            });
+
+            showMeetingNotification("started");
+            chrome.storage.local.set({ isInMeeting: isInMeeting });
         }
-    });
-
-    showMeetingNotification("started");
-    chrome.storage.local.set({ isInMeeting: isInMeeting });
-}
 
         function meetingEnded() {
             if (!isInMeeting) return;
@@ -2534,49 +2576,40 @@
             chrome.storage.local.set({ isInMeeting: isInMeeting });
         }
 
+        function startAutoRecording() {
+            if (recordingStarted) {
+                console.log("⚠️ Zoom: Already recording, ignoring start request");
+                return;
+            }
+            
+            console.log("🎬 Zoom: Starting auto recording...");
+            recordingStarted = true;
+            
+            showRecordingPopup();
+            /*
+            // Only show auto-recording status if auto-record is enabled
+            if (autoRecordEnabled) {
+                showZoomStatus("🔴 Auto Recording Started");
+            } else {
+                showZoomStatus("🔴 Recording Started");
+            }
+            */
 
-
-
-// Then replace the startAutoRecording function:
-function startAutoRecording() {
-    if (recordingStarted) {
-        console.log("⚠️ Zoom: Already recording, ignoring start request");
-        return;
-    }
-    
-    // ADD THIS - Prevents duplicate start attempts
-    if (isZoomStartingRecording) {
-        console.log("⚠️ Zoom: Already starting recording, ignoring duplicate");
-        return;
-    }
-    
-    console.log("🎬 Zoom: Starting auto recording...");
-    isZoomStartingRecording = true;
-    recordingStarted = true;
-    
-    showRecordingPopup();
-    
-    chrome.runtime.sendMessage({ 
-        action: "autoStartRecording",
-        service: 'zoom'
-    }, (response) => {
-        if (response && response.success) {
-            console.log("✅ Zoom: Recording started successfully");
-            showRecordingNotification("started");
-        } else {
-            console.log("❌ Zoom: Recording failed to start");
-            recordingStarted = false;
-            isZoomStartingRecording = false;
-            hideRecordingPopup();
-            showZoomStatus("❌ Auto Recording Failed");
+            chrome.runtime.sendMessage({ 
+                action: "autoStartRecording",
+                service: 'zoom'
+            }, (response) => {
+                if (response && response.success) {
+                    console.log("✅ Zoom: Recording started successfully");
+                    showRecordingNotification("started");
+                } else {
+                    console.log("❌ Zoom: Recording failed to start");
+                    recordingStarted = false;
+                    hideRecordingPopup();
+                    showZoomStatus("Permission needed, try clicking the extension icon once to enable recording.");
+                }
+            });
         }
-    });
-    
-    // Reset lock after 5 seconds
-    setTimeout(() => {
-        isZoomStartingRecording = false;
-    }, 5000);
-}
 
         function stopAutoRecording() {
             if (!recordingStarted) {
@@ -2618,6 +2651,9 @@ function startAutoRecording() {
 
         // UI FUNCTIONS
         function showMeetingNotification(type) {
+
+             // Skip UI if this is an iframe (prevents duplicates)
+            if (!shouldShowUI) return;
             const existingNotification = document.getElementById('meeting-status-notification');
             if (existingNotification) existingNotification.remove();
 
@@ -2649,6 +2685,8 @@ function startAutoRecording() {
         }
 
         function showRecordingNotification(type) {
+             // Skip UI if this is an iframe (prevents duplicates)
+            if (!shouldShowUI) return;
             const notification = document.createElement('div');
             notification.id = 'recording-status-notification';
             notification.style.cssText = `
@@ -2666,6 +2704,8 @@ function startAutoRecording() {
         }
 
         function showRecordingPopup() {
+            // Skip UI if this is an iframe (prevents duplicates)
+            if (!shouldShowUI) return;
             // This function now only updates the top-right status via showZoomStatus
             // The bottom-right red popup is intentionally not created
             
@@ -2719,24 +2759,40 @@ function startAutoRecording() {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             console.log("📨 Zoom content script received:", message.action);
             
-           if (message.action === "updateAutoRecordPermission") {
-    autoRecordEnabled = message.enabled;
-    console.log("🔐 Zoom: Auto record permission updated:", autoRecordEnabled);
+            /*
+            if (message.action === "updateAutoRecordPermission") {
+                autoRecordEnabled = message.enabled;
+                console.log("🔐 Zoom: Auto record permission updated:", autoRecordEnabled);
+                
+                // Show appropriate status when permission changes
+                if (autoRecordEnabled) {
+                    showZoomStatus("✅ Auto Recording Enabled for Zoom", 4000);
+                } else {
+                    showZoomStatus("✅ Auto Recording Disabled for Zoom", 4000);
+                }
     
-    // Show appropriate status when permission changes
-    if (autoRecordEnabled) {
-        showZoomStatus("✅ Auto Recording Enabled for Zoom", 4000);
-        // NEW: If enabled while already in a meeting and not recording, start immediately
-        if (isInMeeting && !recordingStarted) {
-            console.log("🚀 Zoom: Auto-record enabled mid-meeting - starting recording immediately");
-            startAutoRecording();
-        }
-    } else {
-        showZoomStatus("✅ Auto Recording Disabled for Zoom", 4000);
-    }
+                sendResponse({ success: true });
+            }
+            */
 
-    sendResponse({ success: true });
-}
+            if (message.action === "updateAutoRecordPermission") {
+                autoRecordEnabled = message.enabled;
+                console.log("🔐 Zoom: Auto record permission updated:", autoRecordEnabled);
+                
+                // Show appropriate status when permission changes
+                if (autoRecordEnabled) {
+                    showZoomStatus("✅ Auto Recording Enabled for Zoom", 4000);
+                    // NEW: If enabled while already in a meeting and not recording, start immediately
+                    if (isInMeeting && !recordingStarted) {
+                        console.log("🚀 Zoom: Auto-record enabled mid-meeting - starting recording immediately");
+                        startAutoRecording();
+                    }
+                } else {
+                    showZoomStatus("✅ Auto Recording Disabled for Zoom", 4000);
+                }
+
+                sendResponse({ success: true });
+            }
 
             if (message.action === "getZoomMuteStatus") {
                 // Get current mute state from the monitored variable
@@ -2750,6 +2806,12 @@ function startAutoRecording() {
             }
 
             if (message.action === "updateZoomTimer") {
+
+                // Skip UI if this is an iframe (prevents duplicates)
+                if (!shouldShowUI) {
+                    sendResponse({ success: true });
+                    return;
+                }
                 // Update or create recording status in blue format
                 let status = document.getElementById('zoom-recorder-status');
                 if (!status && recordingStarted) {
@@ -2844,6 +2906,11 @@ function startAutoRecording() {
 
             if (message.action === "recordingCompleted") {
                 recordingStarted = false;
+                 // Skip UI if this is an iframe (prevents duplicates)
+                if (!shouldShowUI) {
+                    sendResponse({ success: true });
+                    return;
+                }
                 
                 // Clear the recording status first
                 const existingStatus = document.getElementById('zoom-recorder-status');
