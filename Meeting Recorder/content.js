@@ -688,7 +688,7 @@
         
         setTimeout(() => {
             const hint = document.createElement('div');
-            hint.textContent = "🎬 Huddle Recorder Ready! Recording auto-saves when you leave the call.";
+            //hint.textContent = "🎬 Huddle Recorder Ready! Recording auto-saves when you leave the call.";
             hint.style.cssText = `position:fixed;bottom:20px;right:20px;background:#1a73e8;color:#fff;padding:8px 14px;border-radius:20px;font-size:12px;z-index:100000;`;
             document.body.appendChild(hint);
             setTimeout(() => hint.remove(), 5000);
@@ -741,6 +741,7 @@
         let totalMeetingDuration = 0;
 
         let isExtendedFromHuddle = false;
+        let heartbeatInterval = null;
 
         async function checkIfExtendedFromHuddle() {
             const result = await chrome.storage.local.get(['isExtendingToMeet', 'extendTransitionTime']);
@@ -753,6 +754,22 @@
                 }
             }
         }
+
+        function startMeetHeartbeat() {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (isInMeeting) {
+                    chrome.runtime.sendMessage({ action: "recorderHeartbeat" });
+                }
+            }, 5000);
+        }
+        
+        function stopMeetHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }        
 
         function showMeetStatus(message, duration = 4000) {
             const existing = document.getElementById('meet-recorder-status');
@@ -927,6 +944,7 @@
                 isInMeeting = true;
                 meetingStarted = true;
                 startMeetingTimer();
+                startMeetHeartbeat();
 
                 const startTime = new Date(meetingStartTime).toLocaleTimeString();
                 
@@ -960,6 +978,9 @@
                     clearTimeout(window.autoRecordTimeout);
                     window.autoRecordTimeout = null;
                 }
+
+                stopMeetHeartbeat();
+                chrome.runtime.sendMessage({ action: "meetingEnded", service: "gmeet" });
         
                 if (recordingStarted) {
                     console.log("🛑 Meeting ended - stopping recording");
@@ -1327,6 +1348,24 @@
         let autoRecordEnabled = false;
         let joinButtonObserver = null;
 
+        let heartbeatInterval = null;
+
+        function startTeamsHeartbeat() {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (isInMeeting) {
+                    chrome.runtime.sendMessage({ action: "recorderHeartbeat" });
+                }
+            }, 5000);
+        }
+        
+        function stopTeamsHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }        
+
         function getTeamsMuteStatus() {
             // Teams mute button selectors (you may need to adjust these)
             const muteButton = document.querySelector('[data-tid="toggle-mute"]') ||
@@ -1614,6 +1653,7 @@
             const startTime = new Date().toLocaleTimeString();
             console.log(`🎯 MEETING STARTED - 3-second delay completed at ${startTime}`);
             isInMeeting = true;
+            startTeamsHeartbeat();
             
             if (autoRecordEnabled && !recordingStarted) {
                 console.log("🎬 AUTO RECORDING - Starting recording after delay");
@@ -1632,6 +1672,9 @@
             const endTime = new Date().toLocaleTimeString();
             console.log(`🎯 MEETING ENDED - Leave button was clicked at ${endTime}`);
             isInMeeting = false;
+
+            stopTeamsHeartbeat();
+            chrome.runtime.sendMessage({ action: "meetingEnded", service: "teams" });
             
             if (recordingStarted) {
                 if (autoRecordEnabled) {
@@ -2179,13 +2222,14 @@
     function zoomContent() {
         console.log("🔍 Initializing Zoom content script");
 
-    // Determine if we should show UI (status messages, timer)
-    // UI should ONLY appear in the main frame, NOT in iframes
-    const shouldShowUI = (window.__zoomIsMainFrame === true);
-    
-    if (!shouldShowUI) {
-        console.log("🔇 Zoom iframe: Running mute detection only (no UI elements)");
-    }
+        // Determine if we should show UI (status messages, timer)
+        // UI should ONLY appear in the main frame, NOT in iframes
+        const shouldShowUI = (window.__zoomIsMainFrame === true);
+        
+        if (!shouldShowUI) {
+            console.log("🔇 Zoom iframe: Running mute detection only (no UI elements)");
+        }
+
         let isInMeeting = false;
         let recordingStarted = false;
         let autoRecordEnabled = false;
@@ -2195,6 +2239,24 @@
         let micActivityCheckInterval = null;
         let micMonitoringActive = false;
         let lastMuteState = null;
+
+        let heartbeatInterval = null;
+
+        function startZoomHeartbeat() {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (isInMeeting) {
+                    chrome.runtime.sendMessage({ action: "recorderHeartbeat" });
+                }
+            }, 5000);
+        }
+        
+        function stopZoomHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }
 
         function isMeetingPage() {
             const url = location.href;
@@ -2539,6 +2601,7 @@
 
             console.log("🎯 ZOOM MEETING STARTED");
             isInMeeting = true;
+            startZoomHeartbeat();
 
             startMicrophoneMonitoring();
 
@@ -2564,6 +2627,9 @@
             console.log("🎯 ZOOM MEETING ENDED - EXECUTING STOP SEQUENCE");
             isInMeeting = false;
 
+            stopZoomHeartbeat();
+            chrome.runtime.sendMessage({ action: "meetingEnded", service: 'zoom' });
+            
             stopMicrophoneMonitoring();
             
             if (recordingStarted) {
