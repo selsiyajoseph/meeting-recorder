@@ -18,6 +18,9 @@
     let currentService = null;
     let isExtendedFromHuddle = false;
 
+    let lastHeartbeat = Date.now();
+    let heartbeatCheckInterval = null;
+
     console.log("🎬 Unified Recorder tab loaded");
 
     // Service detection from URL parameters or message
@@ -346,6 +349,23 @@
         }
     }
 
+    function startHeartbeatMonitoring() {
+        if (heartbeatCheckInterval) return;
+        heartbeatCheckInterval = setInterval(() => {
+            const timeSince = Date.now() - lastHeartbeat;
+            // If no heartbeat for 10 seconds and not recording -> close tab
+            if (timeSince > 10000 && !isRecording) {
+                console.log("💀 No heartbeat for 10s and not recording – closing recorder tab");
+                if (heartbeatCheckInterval) clearInterval(heartbeatCheckInterval);
+                window.close();
+            }
+        }, 5000);
+    }
+
+    function resetHeartbeat() {
+        lastHeartbeat = Date.now();
+    }
+
     // ==================== RECORDING START ====================
     async function startRecording(tabId) {
         console.log(`🎬 Starting recording for ${currentService} tab:`, tabId);
@@ -451,6 +471,8 @@
                         updateZoomStatus("❌ Permission needed - please click extension icon once to grant access");
                     }
                 
+                    startHeartbeatMonitoring();
+
                     // For auto-record, we can retry after a delay
                     if (isAutoRecord) {
                         console.log("🔄 Auto-record: Will retry after permission grant");
@@ -486,6 +508,7 @@
             } else if (currentService === 'zoom') {
                 updateZoomStatus("❌ Recording failed. \nTry clicking the Reset button in UI to restart auto-recording.");
             }
+            startHeartbeatMonitoring();
             cleanup();
         }
     }
@@ -759,6 +782,7 @@
         };
 
         mediaRecorder.start(1000);
+        startHeartbeatMonitoring();
         updateToggleDisplay();
         startTimer();
 
@@ -978,6 +1002,19 @@
                     await startRecording(message.tabId);
                     return { success: true };
                 }
+                else if (message.action === "recorderHeartbeat") {
+                    resetHeartbeat();
+                    return { success: true };
+                }
+                else if (message.action === "meetingEnded") {
+                    console.log("📛 Meeting ended message received");
+                    if (!isRecording) {
+                        console.log("🔒 No recording – closing recorder tab immediately");
+                        if (heartbeatCheckInterval) clearInterval(heartbeatCheckInterval);
+                        window.close();
+                    }
+                    return { success: true };
+                }                
                 else if (message.action === "stopRecording") {
                     if (message.forceAutoDownload) {
                         isAutoRecord = true;
