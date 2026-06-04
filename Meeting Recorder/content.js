@@ -1,4 +1,14 @@
-
+// ===== FORCE ZOOM DETECTION - MUST BE FIRST =====
+(function() {
+    const url = window.location.href;
+    if (url.includes('zoom.us') || url.includes('zoom.com')) {
+        window.__zoomIsMainFrame = true;
+        console.log("🔧 FORCE: Zoom UI enabled for page:", url);
+    }
+})();
+// =================================================
+// =================================
+// =================================
 // UNIFIED CONTENT.JS - Google Meet, Microsoft Teams & Zoom
 
 
@@ -13,27 +23,27 @@
     const isZoomPage = currentUrl.includes('zoom.us') || currentUrl.includes('zoom.com');
     const isHuddlePage = currentUrl.includes('meet.google.com/_/frame');
     
-    // ===== ZOOM: Run in ALL frames (for mute detection) but only show UI in MAIN frame =====
     if (isZoomPage) {
-        // Mark if this is the main frame or iframe
-        const isMainFrame = (window === window.top);
-        
-        // Set a flag to identify this frame's purpose
-        if (isMainFrame) {
-            window.__zoomIsMainFrame = true;
-            console.log("✅ Zoom: Main frame - UI and mute detection enabled");
-        } else {
-            window.__zoomIsMainFrame = false;
-            console.log("🔇 Zoom: Iframe - mute detection only (no UI)");
-        }
-        
-        // Prevent duplicate loading in same frame
-        if (window.__zoomContentLoaded) {
-            console.log("🔇 Zoom: Already loaded in this frame");
-            return;
-        }
-        window.__zoomContentLoaded = true;
+    // Prevent duplicate loading in same frame
+    if (window.__zoomContentLoaded) {
+        console.log("🔇 Zoom: Already loaded in this frame");
+        return;
     }
+    window.__zoomContentLoaded = true;
+    
+    // CRITICAL: Only the TOP window should show UI
+    // Iframes should NOT show UI (prevents duplicates)
+    const isTopWindow = (window === window.top);
+    
+    if (!isTopWindow) {
+        // This is an iframe - force UI off
+        window.__zoomIsMainFrame = false;
+        console.log("🔇 Zoom: Iframe detected - UI disabled to prevent duplicates");
+    } else {
+        console.log("✅ Zoom: Top window - UI will be shown");
+        // Don't set __zoomIsMainFrame here - let force detection handle it
+    }
+}
 
    
     const isInIframe = window !== window.top;
@@ -700,18 +710,31 @@
 (function() {
     'use strict';
 
-    // Service detection
-    function detectService() {
-        const url = window.location.href;
-        // Check if we're in Huddle iframe FIRST
-        if (url.includes('meet.google.com/_/frame') || (url.includes('meet.google.com') && window !== window.top)) {
-            return null; // Don't run Meet code in Huddle iframe
-        }
-        if (url.includes('meet.google.com')) return 'gmeet';
-        if (url.includes('teams.microsoft.com') || url.includes('teams.live.com')) return 'teams';
-        if (url.includes('zoom.us') || url.includes('zoom.com')) return 'zoom'; 
+function detectService() {
+    const url = window.location.href;
+    
+    console.log("🔍 detectService - URL:", url);
+    
+    // Check if we're in Huddle iframe FIRST
+    if (url.includes('meet.google.com/_/frame') || (url.includes('meet.google.com') && window !== window.top)) {
         return null;
     }
+    if (url.includes('meet.google.com')) return 'gmeet';
+    if (url.includes('teams.microsoft.com') || url.includes('teams.live.com')) return 'teams';
+    
+    // Zoom detection - catch ALL zoom meeting pages
+    if (url.includes('zoom.us') || url.includes('zoom.com')) {
+        // Also check if this is a meeting page
+        if (url.includes('/wc/') || url.includes('/join') || url.includes('/start')) {
+            console.log("✅ Zoom meeting page detected!");
+        } else {
+            console.log("✅ Zoom page detected (non-meeting)");
+        }
+        return 'zoom';
+    }
+    
+    return null;
+}
 
     const currentService = detectService();
 
@@ -2221,14 +2244,36 @@
     // ==================== ZOOM ====================
     function zoomContent() {
         console.log("🔍 Initializing Zoom content script");
+    
+    // Check if this is an iframe (should not show UI)
+    const isIframe = (window !== window.top);
+    
+    let shouldShowUI = (window.__zoomIsMainFrame === true);
+    
+    // If this is an iframe, force UI off (prevents duplicates)
+    if (isIframe) {
+        shouldShowUI = false;
+        console.log("🔇 Zoom iframe: UI disabled to prevent duplicates");
+    }
+    
+    console.log("📍 shouldShowUI:", shouldShowUI, "| isIframe:", isIframe);
+    
+    if (!shouldShowUI) {
+        console.log("🔇 Zoom iframe: Running mute detection only (no UI elements)");
+    }
 
-        // Determine if we should show UI (status messages, timer)
-        // UI should ONLY appear in the main frame, NOT in iframes
-        const shouldShowUI = (window.__zoomIsMainFrame === true);
-        
-        if (!shouldShowUI) {
-            console.log("🔇 Zoom iframe: Running mute detection only (no UI elements)");
-        }
+
+        // ===== ADD THIS: Show dashboard status =====
+    const isDashboard = !window.location.href.includes('/wc/') && 
+                        !window.location.href.includes('/meeting/') &&
+                        (window.location.href.includes('zoom.com') || window.location.href.includes('zoom.us'));
+    
+    if (isDashboard && shouldShowUI) {
+        console.log("🏠 Zoom Dashboard detected - extension ready");
+        showZoomStatus("✅ Zoom Recorder Ready - Join a meeting to start recording", 5000);
+    }
+    // ===========================================
+
 
         let isInMeeting = false;
         let recordingStarted = false;
@@ -2241,6 +2286,8 @@
         let lastMuteState = null;
 
         let heartbeatInterval = null;
+        let lastUrl = window.location.href;
+        let isDashboardPage = false;
 
         function startZoomHeartbeat() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -2258,14 +2305,51 @@
             }
         }
 
-        function isMeetingPage() {
-            const url = location.href;
-            return url.includes("/wc/") && (
-                url.includes("/join") ||
-                url.includes("/start") ||
-                url.match(/\/wc\/\d+/)
-            );
-        }
+function isMeetingPage() {
+    const url = location.href;
+    
+    console.log("🔍 isMeetingPage checking URL:", url);
+    
+    // EXCLUDE dashboard and non-meeting pages FIRST
+    const isDashboard = url.includes('/wb/embed/dashboard') || 
+                        url.includes('/wc/home') ||
+                        url.includes('zoom.us/home') ||
+                        url.includes('zoom.com/home') ||
+                        (!url.includes('/wc/') && !url.includes('/meeting/') && url.includes('zoom'));
+    
+    if (isDashboard) {
+        console.log("🔍 isMeetingPage: EXCLUDING dashboard page");
+        return false;
+    }
+    
+    // Standard Zoom meeting URL patterns
+    const hasWcPattern = url.includes("/wc/") && (
+        url.includes("/join") ||
+        url.includes("/start") ||
+        url.match(/\/wc\/\d+/)
+    );
+    
+    // Check for meeting join page
+    const isJoinPage = url.includes("/join") && (url.includes("zoom.us") || url.includes("zoom.com"));
+    
+    // Check for active meeting page (already in meeting)
+    const isActiveMeeting = url.includes("/wc/") && url.includes("/start");
+    
+    // Check for meeting in progress indicators (DOM elements)
+    // BUT make sure we're not on dashboard
+    const hasMeetingElements = !isDashboard && !!document.querySelector('#wc-container, .meeting-app, [data-zms-page], .video-container, .meeting-controls-container');
+    
+    // Check if this is a Zoom meeting tab (any /wc/ URL)
+    const isZoomMeetingTab = url.includes("/wc/") && !url.includes("/wb/");
+    
+    const result = hasWcPattern || isJoinPage || isActiveMeeting || hasMeetingElements || isZoomMeetingTab;
+    
+    console.log("🔍 isMeetingPage result:", result, {
+        hasWcPattern, isJoinPage, isActiveMeeting, hasMeetingElements, isZoomMeetingTab, isDashboard
+    });
+    
+    return result;
+}
 
         function startMicrophoneMonitoring() {
             if (micMonitoringActive) return;
@@ -2305,11 +2389,18 @@
 
         // ==================== ZOOM STATUS FUNCTIONS ====================
         function showZoomStatus(message, duration = 4000) {
-            // Skip UI if this is an iframe (prevents duplicates)
-        if (!shouldShowUI) {
-            console.log("🔇 Zoom iframe: Skipping UI display");
-            return;
-        }
+        console.log("📢 showZoomStatus called with message:", message, "shouldShowUI:", shouldShowUI);
+        // Skip UI if this is an iframe (prevents duplicates)
+        if (window !== window.top) {
+        console.log("🔇 Zoom iframe: Skipping UI display");
+        return;
+    }
+    
+    // Skip UI if shouldShowUI is false
+    if (!shouldShowUI) {
+        console.log("🔇 Zoom: Skipping UI display");
+        return;
+    }
             // For recording timer, use the blue style
             if (message.includes("Recording...")) {
                 let status = document.getElementById('zoom-recorder-status');
@@ -2371,6 +2462,7 @@
         }
 
         function broadcastTimerUpdateToZoom(timeStr) {
+            console.log("⏰ Broadcasting timer update to Zoom:", timeStr);
             chrome.runtime.sendMessage({
                 action: "updateZoomTimer",
                 time: timeStr
@@ -2399,32 +2491,176 @@
             });
         }
 
-        function startMeetingDetection() {
-            console.log("🚀 Starting Zoom meeting detection...");
-            
-            let lastMeetingState = false;
-            
-            setInterval(() => {
-                const isOnMeetingPage = isMeetingPage();
-                
-                if (isOnMeetingPage && !lastMeetingState && !isInMeeting) {
-                    console.log("🎯 ZOOM MEETING PAGE DETECTED!");
+function checkForUrlChange() {
+    const currentUrl = window.location.href;
+    
+    if (currentUrl !== lastUrl) {
+        console.log("🔄 URL changed from:", lastUrl, "to:", currentUrl);
+        lastUrl = currentUrl;
+        
+        // Check if we're on dashboard (no meeting)
+        const isOnDashboard = currentUrl.includes('/wb/embed/dashboard') || 
+                              currentUrl.includes('/wc/home') ||
+                              (!currentUrl.includes('/wc/') && !currentUrl.includes('/meeting/') &&
+                               (currentUrl.includes('zoom.com') || currentUrl.includes('zoom.us')));
+        
+        if (isOnDashboard) {
+            console.log("🏠 Dashboard detected - resetting meeting states");
+            isDashboardPage = true;
+            isInMeeting = false;
+            recordingStarted = false;
+            if (meetingStartTimeout) {
+                clearTimeout(meetingStartTimeout);
+                meetingStartTimeout = null;
+            }
+        } else if (isMeetingPage() && !isInMeeting && !recordingStarted) {
+            console.log("🎯 Meeting page detected after URL change - starting detection");
+            setTimeout(() => {
+                if (isMeetingPage() && !isInMeeting && !recordingStarted) {
                     startMeetingWithDelay();
                 }
-                
-                if (!isOnMeetingPage && lastMeetingState && isInMeeting) {
-                    if (Date.now() < ignoreAutoStopUntil) {
-                        console.log("⏱️ Auto-stop BLOCKED - small X button was clicked");
-                        ignoreAutoStopUntil = 0;
-                    } else {
-                        console.log("🛑 ZOOM MEETING ENDED - URL changed!");
-                        meetingEnded();
-                    }
-                }
-                
-                lastMeetingState = isOnMeetingPage;
-            }, 1000);
+            }, 2000);
         }
+    }
+}
+
+
+function detectMeetingEndAndReset() {
+    const currentUrl = window.location.href;
+    
+    // Check if we're on dashboard (not a meeting)
+    const isOnDashboard = currentUrl.includes('/wb/embed/dashboard') || 
+                          currentUrl.includes('/wc/home') ||
+                          (!currentUrl.includes('/wc/') && !currentUrl.includes('/meeting/') && 
+                           (currentUrl.includes('zoom.com') || currentUrl.includes('zoom.us')));
+    
+    if (isOnDashboard && isInMeeting) {
+        console.log("🏠 Returned to dashboard - meeting ended, resetting states");
+        isInMeeting = false;
+        recordingStarted = false;
+        isDashboardPage = true;
+        if (meetingStartTimeout) {
+            clearTimeout(meetingStartTimeout);
+            meetingStartTimeout = null;
+        }
+        // Also stop any ongoing recording detection
+        if (window.autoRecordTimeout) {
+            clearTimeout(window.autoRecordTimeout);
+            window.autoRecordTimeout = null;
+        }
+    }
+}
+
+
+function setupDashboardJoinDetection() {
+    console.log("🔍 Setting up dashboard join button detection");
+    
+    // Listen for clicks on the dashboard
+    document.addEventListener('click', (e) => {
+        // Find the join button
+        const joinButton = e.target.closest('button, a, div[role="button"]');
+        if (!joinButton) return;
+        
+        const buttonText = (joinButton.textContent || '').toLowerCase();
+        const buttonLabel = joinButton.getAttribute('aria-label') || '';
+        const isJoinButton = buttonText.includes('join') || 
+                             buttonText.includes('start') ||
+                             buttonLabel.toLowerCase().includes('join');
+        
+        if (isJoinButton) {
+            console.log("🎯 Join button clicked on dashboard");
+            
+            // Check if this opens a new tab (target="_blank")
+            const opensNewTab = joinButton.getAttribute('target') === '_blank' ||
+                                joinButton.closest('a')?.getAttribute('target') === '_blank';
+            
+            if (opensNewTab) {
+                console.log("⚠️ Join button opens new tab - will detect in new tab");
+                // The new tab will handle its own detection
+                // Just log that we detected it
+            } else {
+                // Same tab navigation - wait for it
+                console.log("🔄 Same tab navigation - waiting for meeting page");
+                setTimeout(() => {
+                    if (isMeetingPage() && !isInMeeting && !recordingStarted) {
+                        console.log("✅ Meeting detected after join click - starting recording");
+                        startMeetingWithDelay();
+                    }
+                }, 5000);
+            }
+        }
+    }, true);
+}
+
+
+
+function setupTabFocusDetection() {
+    // Detect when tab becomes visible (user switches to this tab)
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && isMeetingPage() && !isInMeeting && !recordingStarted) {
+            console.log("👁️ Tab became visible - checking for meeting");
+            setTimeout(() => {
+                if (isMeetingPage() && !isInMeeting && !recordingStarted) {
+                    console.log("✅ Meeting detected on tab focus - starting recording");
+                    startMeetingWithDelay();
+                }
+            }, 2000);
+        }
+    });
+}
+
+
+
+
+function startMeetingDetection() {
+    console.log("🚀 Starting Zoom meeting detection...");
+    
+    let lastMeetingState = false;
+    
+    // Check immediately
+    setTimeout(() => {
+        if (isMeetingPage() && !isInMeeting && !recordingStarted) {
+            console.log("🎯 ZOOM MEETING PAGE DETECTED (initial check)!");
+            startMeetingWithDelay();
+        }
+    }, 1000);
+    
+    setInterval(() => {
+        const isOnMeetingPage = isMeetingPage();
+        
+        if (isOnMeetingPage && !lastMeetingState && !isInMeeting) {
+            console.log("🎯 ZOOM MEETING PAGE DETECTED!");
+            startMeetingWithDelay();
+        }
+        
+        if (!isOnMeetingPage && lastMeetingState && isInMeeting) {
+            if (Date.now() < ignoreAutoStopUntil) {
+                console.log("⏱️ Auto-stop BLOCKED - small X button was clicked");
+                ignoreAutoStopUntil = 0;
+            } else {
+                console.log("🛑 ZOOM MEETING ENDED - URL changed!");
+                meetingEnded();
+            }
+        }
+        
+        lastMeetingState = isOnMeetingPage;
+    }, 1000);
+}
+
+
+function setupNewTabDetection() {
+    // Listen for messages from background about new Zoom tabs
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === "newZoomTab" && message.tabId) {
+            console.log("🆕 New Zoom tab detected by background");
+            if (isMeetingPage() && !isInMeeting && !recordingStarted) {
+                console.log("🎯 New meeting tab - starting detection");
+                setTimeout(() => startMeetingWithDelay(), 2000);
+            }
+        }
+        return true;
+    });
+}
 
         function setupEndButtonDetection() {
             console.log("🖱️ ZOOM LEAVE/END BUTTON DETECTION - ACTIVATED!");
@@ -2599,7 +2835,8 @@
         function meetingStarted() {
             if (isInMeeting && recordingStarted) return;
 
-            console.log("🎯 ZOOM MEETING STARTED");
+            console.log("🎯 ZOOM MEETING STARTED - Recording will begin in 8 seconds");
+            console.log("📍 Meeting URL:", window.location.href);
             isInMeeting = true;
             startZoomHeartbeat();
 
@@ -2642,40 +2879,73 @@
             chrome.storage.local.set({ isInMeeting: isInMeeting });
         }
 
-        function startAutoRecording() {
-            if (recordingStarted) {
-                console.log("⚠️ Zoom: Already recording, ignoring start request");
-                return;
-            }
-            
-            console.log("🎬 Zoom: Starting auto recording...");
-            recordingStarted = true;
-            
-            showRecordingPopup();
-            /*
-            // Only show auto-recording status if auto-record is enabled
-            if (autoRecordEnabled) {
-                showZoomStatus("🔴 Auto Recording Started");
-            } else {
-                showZoomStatus("🔴 Recording Started");
-            }
-            */
+function startAutoRecording() {
+    if (recordingStarted) {
+        console.log("⚠️ Zoom: Already recording, ignoring start request");
+        return;
+    }
+    
+    console.log("🎬 Zoom: Starting auto recording...");
+    
+    // FORCE set UI flag before recording
+    if (window.__zoomIsMainFrame !== true) {
+        console.log("⚠️ Fixing UI flag before recording");
+        window.__zoomIsMainFrame = true;
+    }
+    
+    recordingStarted = true;
+    
 
-            chrome.runtime.sendMessage({ 
-                action: "autoStartRecording",
-                service: 'zoom'
-            }, (response) => {
-                if (response && response.success) {
-                    console.log("✅ Zoom: Recording started successfully");
-                    showRecordingNotification("started");
-                } else {
-                    console.log("❌ Zoom: Recording failed to start");
-                    recordingStarted = false;
-                    hideRecordingPopup();
-                    showZoomStatus("Permission needed, try clicking the extension icon once to enable recording.");
-                }
-            });
+    
+    showRecordingPopup();
+    
+    chrome.runtime.sendMessage({ 
+        action: "autoStartRecording",
+        service: 'zoom'
+    }, (response) => {
+        if (response && response.success) {
+            console.log("✅ Zoom: Recording started successfully");
+            showRecordingNotification("started");
+        } else {
+            console.log("❌ Zoom: Recording failed to start");
+            recordingStarted = false;
+            hideRecordingPopup();
         }
+    });
+}
+
+
+        function forceShowRecordingUI() {
+    console.log("🚨 FORCE creating recording UI");
+    
+    // Remove any existing status div
+    const existing = document.getElementById('zoom-recorder-status');
+    if (existing) existing.remove();
+    
+    // Create new status div
+    const status = document.createElement('div');
+    status.id = 'zoom-recorder-status';
+    status.style.cssText = `
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        background: #2D8CFF;
+        color: white;
+        padding: 12px 18px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        font-weight: bold;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        border: 2px solid #1A5EB8;
+    `;
+    status.textContent = "🔴 Recording... 00:00";
+    document.body.appendChild(status);
+    console.log("✅ FORCE UI created");
+    
+    return status;
+}
 
         function stopAutoRecording() {
             if (!recordingStarted) {
@@ -3032,20 +3302,33 @@
         });
 
         setTimeout(() => {
-            console.log("🔧 Starting Zoom Auto Recorder...");
-            startMeetingDetection();
-            setupEndButtonDetection();
-            setupURLChangeDetection();
+    console.log("🔧 Starting Zoom Auto Recorder...");
+    startMeetingDetection();
+    setupEndButtonDetection();
+    setupURLChangeDetection();
+    setupDashboardJoinDetection();  
+    setupTabFocusDetection();
     
-            window.addEventListener('beforeunload', () => {
-                if (isInMeeting && recordingStarted) {
-                    console.log("🚨 PAGE UNLOADING - FORCE STOPPING RECORDING");
-                    chrome.runtime.sendMessage({ action: "autoStopRecording" });
-                }
-            });
+    // ===== ADD THESE TWO LINES =====
+    setInterval(checkForUrlChange, 1000);      // Monitor URL changes
+    setInterval(detectMeetingEndAndReset, 2000); // Monitor dashboard returns
+    // ================================
     
-            console.log("✅ Zoom Auto Recorder initialized");
-        }, 1000);
+    // Initial check for meeting page
+    if (isMeetingPage() && !isInMeeting && !recordingStarted) {
+        console.log("🎯 Already on meeting page - starting detection");
+        setTimeout(() => startMeetingWithDelay(), 2000);
+    }
+    
+    window.addEventListener('beforeunload', () => {
+        if (isInMeeting && recordingStarted) {
+            console.log("🚨 PAGE UNLOADING - FORCE STOPPING RECORDING");
+            chrome.runtime.sendMessage({ action: "autoStopRecording" });
+        }
+    });
+    
+    console.log("✅ Zoom Auto Recorder initialized");
+}, 1000);
 
         console.log("🔍 Zoom Auto Recorder content script loaded");
     }
