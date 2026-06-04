@@ -558,6 +558,16 @@
         
         const handleAsync = async () => {
             try {
+                if (message.action === "recorderHeartbeat" || message.action === "meetingEnded") {
+                    // Forward to all recorder tabs
+                    chrome.tabs.query({ url: chrome.runtime.getURL("recorder.html") }, (tabs) => {
+                        tabs.forEach(tab => {
+                            chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+                        });
+                    });
+                    return { success: true };
+                }
+                                
                 // Huddle download messages
                 if (message.action === "downloadRecording") {
                     await handleDirectDownload(message.data, message.filename);
