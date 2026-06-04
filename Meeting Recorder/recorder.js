@@ -862,7 +862,7 @@
     }
 
     function updateZoomStatus(message, duration = 4000) {
-    //chrome.runtime.sendMessage({ action: "showZoomStatus", message: message, duration: duration });
+    chrome.runtime.sendMessage({ action: "showZoomStatus", message: message, duration: duration });
 }
 
     async function setupZoomAudio(tabStream, tabId) {
